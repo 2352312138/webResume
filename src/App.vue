@@ -198,6 +198,7 @@ const heroCardStyle = ref({
   "--hero-lift": "0px",
 });
 const wechatId = "wry2352312138";
+const marketLogPrefix = "[project-market]";
 
 const timeline = [
   {
@@ -226,6 +227,8 @@ let sceneApi;
 let awardsSceneApi;
 let wechatTimer;
 let clickParticleId = 0;
+let sceneShowcaseAutoTimer;
+let sceneShowcaseAutoActive = false;
 
 async function copyWechatAndOpenApp() {
   window.clearTimeout(wechatTimer);
@@ -261,29 +264,58 @@ function getMarketUrl(app) {
   return targets[app.type];
 }
 
-function resolveProjectMarket(project) {
-  const markets = project.markets ?? [];
+function getMarketDeviceInfo() {
   const ua = navigator.userAgent || "";
   const platform = navigator.platform || "";
   const maxTouchPoints = navigator.maxTouchPoints || 0;
-  const isIos =
-    /iPad|iPhone|iPod/i.test(ua) ||
-    (platform === "MacIntel" && maxTouchPoints > 1);
-  const isHuaweiOrHarmony = /HarmonyOS|OpenHarmony|ArkWeb|Huawei|HUAWEI|HONOR/i.test(ua);
-  const isAndroid = /Android/i.test(ua);
+
+  return {
+    ua,
+    platform,
+    maxTouchPoints,
+    isIos:
+      /iPad|iPhone|iPod/i.test(ua) ||
+      (platform === "MacIntel" && maxTouchPoints > 1),
+    isHarmony: /HarmonyOS|OpenHarmony|ArkWeb|HMOS/i.test(ua),
+    isHuaweiDevice: /Huawei|HUAWEI|HONOR/i.test(ua),
+    isAndroid: /Android/i.test(ua),
+  };
+}
+
+function resolveProjectMarket(project) {
+  const markets = project.markets ?? [];
+  const device = getMarketDeviceInfo();
 
   if (!markets.length) return undefined;
-  if (isIos) return markets.find((app) => app.type === "ios") ?? markets[0];
-  if (isHuaweiOrHarmony) return markets.find((app) => app.type === "harmony") ?? markets.find((app) => app.type === "android") ?? markets[0];
-  if (isAndroid) return markets.find((app) => app.type === "android") ?? markets.find((app) => app.type === "harmony") ?? markets[0];
+  if (device.isIos) return markets.find((app) => app.type === "ios") ?? markets[0];
+  if (device.isAndroid) return markets.find((app) => app.type === "android") ?? markets.find((app) => app.type === "harmony") ?? markets[0];
+  if (device.isHarmony) return markets.find((app) => app.type === "harmony") ?? markets.find((app) => app.type === "android") ?? markets[0];
   return markets[0];
 }
 
 function openProjectMarket(project) {
+  const device = getMarketDeviceInfo();
   const app = resolveProjectMarket(project);
   const url = app ? getMarketUrl(app) : undefined;
+  const payload = {
+    project: project.name,
+    device,
+    markets: project.markets ?? [],
+    selectedMarket: app,
+    url,
+  };
 
-  if (!url) return;
+  console.info(marketLogPrefix, payload);
+  window.sessionStorage?.setItem?.("projectMarket:lastOpen", JSON.stringify(payload));
+
+  if (!url) {
+    console.warn(marketLogPrefix, "No market url resolved.", {
+      project: project.name,
+      markets: project.markets ?? [],
+    });
+    return;
+  }
+
   window.location.href = url;
 }
 
@@ -363,6 +395,27 @@ function moveHeroCard(event) {
 function releaseHeroCard(event) {
   event.currentTarget.releasePointerCapture?.(event.pointerId);
   resetHeroCardTilt();
+}
+
+function stopSceneShowcaseAuto() {
+  sceneShowcaseAutoActive = false;
+  window.clearTimeout(sceneShowcaseAutoTimer);
+}
+
+function scheduleSceneShowcaseAuto() {
+  window.clearTimeout(sceneShowcaseAutoTimer);
+  sceneShowcaseAutoTimer = window.setTimeout(() => {
+    if (!sceneShowcaseAutoActive) return;
+    sceneApi?.randomize?.();
+    scheduleSceneShowcaseAuto();
+  }, 3000 + Math.random() * 2000);
+}
+
+function startSceneShowcaseAuto() {
+  if (sceneShowcaseAutoActive) return;
+  sceneShowcaseAutoActive = true;
+  sceneApi?.randomize?.();
+  scheduleSceneShowcaseAuto();
 }
 
 function wrapCanvasText(context, text, x, y, maxWidth, lineHeight, maxLines) {
@@ -763,7 +816,7 @@ function initScene() {
     preserveDrawingBuffer: true,
   });
   const pointer = new THREE.Vector2(0, 0);
-  const colors = [0x8e5cff, 0x48d8ff, 0xb7ff68, 0xffb84d, 0xff5c93, 0x66ffd7];
+  const colors = [0x55d8ff, 0x7c5cff, 0x39f5d6, 0x2f7dff, 0xff5cab, 0x55d8ff];
   const state = {
     color: new THREE.Color(colors[0]),
     targetColor: new THREE.Color(colors[0]),
@@ -772,9 +825,8 @@ function initScene() {
   };
   const intro = {
     core: reducedMotion ? 0 : 1,
-    scale: reducedMotion ? 1 : 7.6,
+    scale: reducedMotion ? 1 : 13.5,
     spin: 0,
-    tunnelPull: reducedMotion ? 0 : -15.5,
   };
   const scrollState = {
     current: 0,
@@ -790,84 +842,194 @@ function initScene() {
   const group = new THREE.Group();
   scene.add(group);
 
-  const tunnel = new THREE.Group();
-  const tunnelParts = [];
-  scene.add(tunnel);
+  const particleCount = 30000;
+  const positions = new Float32Array(particleCount * 3);
+  const origins = new Float32Array(particleCount * 3);
+  const drift = new Float32Array(particleCount * 3);
+  const phase = new Float32Array(particleCount);
+  const curveTargets = [];
+  const shapeCount = 7;
+  const tau = Math.PI * 2;
+  const golden = 0.618033988749895;
+  function shuffleIndexes(length) {
+    const indexes = Array.from({ length }, (_, index) => index);
 
-  const tunnelMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    wireframe: true,
-    transparent: true,
-    opacity: 0.13,
-  });
+    for (let index = indexes.length - 1; index > 0; index -= 1) {
+      const next = Math.floor(Math.random() * (index + 1));
+      [indexes[index], indexes[next]] = [indexes[next], indexes[index]];
+    }
 
-  for (let index = 0; index < 9; index += 1) {
-    const ringGeometry = new THREE.TorusGeometry(2.2 + index * 0.34, 0.012, 6, 96);
-    const ring = new THREE.Mesh(ringGeometry, tunnelMaterial);
-    ring.position.z = -index * 1.2;
-    ring.rotation.z = index * 0.22;
-    tunnel.add(ring);
-    tunnelParts.push({ geometry: ringGeometry, ring });
+    if (indexes.every((value, index) => value === index)) {
+      indexes.push(indexes.shift());
+    }
+
+    return indexes;
   }
 
-  const knotGeometry = new THREE.TorusKnotGeometry(1.7, 0.46, 220, 18, 2, 5);
-  const knotMaterial = new THREE.MeshBasicMaterial({
-    color: state.color,
-    wireframe: true,
-    transparent: true,
-    opacity: 0.92,
-  });
-  const knot = new THREE.Mesh(knotGeometry, knotMaterial);
-  knot.rotation.set(0.7, 0.18, -0.36);
-  group.add(knot);
+  const curveOrder = shuffleIndexes(shapeCount);
+  const colorOrder = shuffleIndexes(colors.length);
+  const transitionSeeds = Array.from({ length: shapeCount }, () => Math.random() * tau);
+  const manualStartTargets = new Float32Array(particleCount * 3);
+  let manualWarp = 0;
+  let manualMorph = 0;
+  let manualUseSnapshot = false;
+  let manualFrom = curveOrder[0];
+  let manualTo = curveOrder[1] ?? curveOrder[0];
+  let manualSequenceIndex = 0;
+  let manualColor = new THREE.Color(colors[0]);
 
-  const shellGeometry = new THREE.IcosahedronGeometry(4.1, 2);
-  const shellMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    wireframe: true,
-    transparent: true,
-    opacity: 0.16,
-  });
-  const shell = new THREE.Mesh(shellGeometry, shellMaterial);
-  group.add(shell);
+  function smoothstep(value) {
+    return value * value * (3 - 2 * value);
+  }
 
-  const particleCount = window.innerWidth < 700 ? 700 : 1300;
-  const positions = new Float32Array(particleCount * 3);
-  const phase = new Float32Array(particleCount);
+  function setPoint(buffer, index, x, y, z) {
+    buffer[index * 3] = x;
+    buffer[index * 3 + 1] = y;
+    buffer[index * 3 + 2] = z;
+  }
 
-  for (let index = 0; index < particleCount; index += 1) {
-    const radius = 4 + Math.random() * 9;
-    const angle = Math.random() * Math.PI * 2;
-    positions[index * 3] = Math.cos(angle) * radius;
-    positions[index * 3 + 1] = (Math.random() - 0.5) * 7;
-    positions[index * 3 + 2] = Math.sin(angle) * radius - Math.random() * 10;
-    phase[index] = Math.random() * Math.PI * 2;
+  function buildKochPoints(iterations) {
+    let points = [
+      new THREE.Vector2(-2.4, -1.25),
+      new THREE.Vector2(2.4, -1.25),
+      new THREE.Vector2(0, 2.1),
+      new THREE.Vector2(-2.4, -1.25),
+    ];
+
+    for (let depth = 0; depth < iterations; depth += 1) {
+      const next = [];
+
+      for (let index = 0; index < points.length - 1; index += 1) {
+        const a = points[index];
+        const b = points[index + 1];
+        const one = a.clone().lerp(b, 1 / 3);
+        const two = a.clone().lerp(b, 2 / 3);
+        const peak = two.clone().sub(one).rotateAround(new THREE.Vector2(0, 0), -Math.PI / 3).add(one);
+
+        next.push(a, one, peak, two);
+      }
+
+      next.push(points[points.length - 1]);
+      points = next;
+    }
+
+    return points;
+  }
+
+  function samplePolyline(points, progress) {
+    const wrapped = progress - Math.floor(progress);
+    const scaled = wrapped * (points.length - 1);
+    const index = Math.min(points.length - 2, Math.floor(scaled));
+    const local = scaled - index;
+    return points[index].clone().lerp(points[index + 1], local);
+  }
+
+  const kochPoints = buildKochPoints(4);
+
+  function createCurveTargets() {
+    for (let curve = 0; curve < shapeCount; curve += 1) {
+      curveTargets.push(new Float32Array(particleCount * 3));
+    }
+
+    for (let index = 0; index < particleCount; index += 1) {
+      const u = (index * golden + Math.random() * 0.0009) % 1;
+      const lane = ((index % 233) / 233 - 0.5);
+      const layer = ((index % 89) / 89 - 0.5);
+      const t = u * tau;
+      const dust = (Math.random() - 0.5) * 0.18;
+
+      const koch = samplePolyline(kochPoints, u * 5.4 + layer * 0.08);
+      setPoint(curveTargets[0], index, koch.x * 1.12 + lane * 0.24, koch.y * 1.12 + layer * 0.24, Math.sin(u * tau * 8) * 0.75 + lane * 2.1);
+
+      const heartX = 16 * Math.pow(Math.sin(t), 3);
+      const heartY = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+      setPoint(curveTargets[1], index, heartX * 0.18 + lane * 0.42, heartY * 0.18 - 0.42 + layer * 0.34, Math.sin(t * 5 + lane) * 1.15);
+
+      const butterflyT = u * tau * 5.2;
+      const butterflyR = Math.exp(Math.sin(butterflyT)) - 2 * Math.cos(4 * butterflyT) + Math.pow(Math.sin((2 * butterflyT - Math.PI) / 24), 5);
+      setPoint(curveTargets[2], index, Math.sin(butterflyT) * butterflyR * 0.78 + lane * 0.32, Math.cos(butterflyT) * butterflyR * 0.78 + layer * 0.32, Math.sin(butterflyT * 0.72) * 2.2);
+
+      const spiralT = u * tau * 7.6;
+      const spiralR = 0.13 * spiralT;
+      setPoint(curveTargets[3], index, Math.cos(spiralT) * spiralR + lane * 0.25, Math.sin(spiralT) * spiralR + layer * 0.25, (u - 0.5) * 7.2 + Math.sin(spiralT) * 0.35);
+
+      const galaxyArm = index % 5;
+      const galaxyT = u * tau * 6.2 + galaxyArm * (tau / 5);
+      const galaxyR = 0.18 + Math.pow(u, 0.5) * 4.85;
+      const galaxyTwist = galaxyT + galaxyR * 1.72;
+      const armWidth = (Math.random() - 0.5) * (0.12 + u * 0.34);
+      setPoint(curveTargets[4], index, Math.cos(galaxyTwist + armWidth) * galaxyR + lane * 0.18, Math.sin(galaxyTwist + armWidth) * galaxyR * 0.58 + layer * 0.18, Math.sin(galaxyT * 1.55 + galaxyArm) * 0.55 + layer * 0.72);
+
+      const lemT = u * tau * 2;
+      const lemDen = 1 + Math.pow(Math.sin(lemT), 2);
+      setPoint(curveTargets[5], index, (3.8 * Math.cos(lemT)) / lemDen + lane * 0.28, (3.8 * Math.sin(lemT) * Math.cos(lemT)) / lemDen + layer * 0.28, Math.cos(lemT * 2) * 1.25);
+
+      const roseT = u * tau * 4;
+      const roseR = 3.7 * Math.cos(5 * roseT);
+      setPoint(curveTargets[6], index, Math.cos(roseT) * roseR + lane * 0.3, Math.sin(roseT) * roseR + layer * 0.3, Math.sin(roseT * 3) * 1.45 + dust);
+
+      origins[index * 3] = (Math.random() - 0.5) * 18;
+      origins[index * 3 + 1] = (Math.random() - 0.5) * 12;
+      origins[index * 3 + 2] = -16 - Math.random() * 18;
+      positions[index * 3] = origins[index * 3];
+      positions[index * 3 + 1] = origins[index * 3 + 1];
+      positions[index * 3 + 2] = origins[index * 3 + 2];
+      drift[index * 3] = (Math.random() - 0.5) * 0.22;
+      drift[index * 3 + 1] = (Math.random() - 0.5) * 0.22;
+      drift[index * 3 + 2] = (Math.random() - 0.5) * 0.42;
+      phase[index] = Math.random() * tau;
+    }
+  }
+
+  createCurveTargets();
+
+  function randomizeCurves() {
+    const currentProgress = scrollState.current * (shapeCount - 1);
+    const currentIndex = Math.min(shapeCount - 1, Math.floor(currentProgress));
+    manualFrom = manualMorph > 0.001 ? manualTo : curveOrder[currentIndex];
+    manualSequenceIndex = manualSequenceIndex === manualFrom ? (manualSequenceIndex + 1) % shapeCount : manualSequenceIndex;
+    manualTo = manualSequenceIndex;
+    manualSequenceIndex = (manualSequenceIndex + 1) % shapeCount;
+
+    manualUseSnapshot = manualMorph <= 0.001;
+    if (manualUseSnapshot) {
+      manualStartTargets.set(particleGeometry.attributes.position.array);
+    }
+
+    transitionSeeds.forEach((_, index) => {
+      transitionSeeds[index] = Math.random() * tau;
+    });
+
+    manualMorph = 1;
+    manualColor.setHex(colors[Math.floor(Math.random() * colors.length)]);
+    manualWarp = 0.28;
   }
 
   const particleGeometry = new THREE.BufferGeometry();
   particleGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  particleGeometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
 
   const particleMaterial = new THREE.PointsMaterial({
     color: state.color,
-    size: 0.052,
+    size: 0.025,
     transparent: true,
-    opacity: 0.92,
+    opacity: 0.94,
+    blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
   const particles = new THREE.Points(particleGeometry, particleMaterial);
-  scene.add(particles);
+  group.add(particles);
 
-  const lineMaterial = new THREE.LineBasicMaterial({
-    color: 0xffffff,
+  const glowMaterial = new THREE.PointsMaterial({
+    color: 0x4ec7ff,
+    size: 0.092,
     transparent: true,
-    opacity: 0.22,
+    opacity: 0.24,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
   });
-  const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-5.8, -2.8, -2),
-    new THREE.Vector3(5.8, 2.8, -4),
-  ]);
-  const slash = new THREE.Line(lineGeometry, lineMaterial);
-  scene.add(slash);
+  const glowParticles = new THREE.Points(particleGeometry, glowMaterial);
+  group.add(glowParticles);
 
   function resize() {
     const { width, height } = host.getBoundingClientRect();
@@ -875,11 +1037,9 @@ function initScene() {
 
     renderer.setSize(width, height, false);
     camera.aspect = width / Math.max(height, 1);
-    state.baseCameraZ = isMobile ? 14.6 : 10.2;
+    state.baseCameraZ = isMobile ? 11.2 : 8.4;
     camera.position.z = state.baseCameraZ;
-    group.scale.setScalar(isMobile ? 0.84 : 1.18);
-    particles.scale.setScalar(isMobile ? 0.88 : 1.08);
-    tunnel.scale.setScalar(isMobile ? 0.76 : 1);
+    group.scale.setScalar(isMobile ? 0.92 : 1.26);
     camera.updateProjectionMatrix();
   }
 
@@ -890,9 +1050,24 @@ function initScene() {
     );
     const progress = THREE.MathUtils.clamp(window.scrollY / maxScroll, 0, 1);
     const colorIndex = Math.min(colors.length - 1, Math.floor(progress * colors.length));
+    const scrollDelta = Math.abs(progress - scrollState.target);
+
+    const atShowcase = progress > 0.965;
+
+    if (scrollDelta > 0.0015 && !atShowcase) {
+      manualMorph = 0;
+      manualWarp = 0;
+      stopSceneShowcaseAuto();
+    }
+
+    if (atShowcase) {
+      startSceneShowcaseAuto();
+    } else {
+      stopSceneShowcaseAuto();
+    }
 
     scrollState.target = progress;
-    state.targetColor.setHex(colors[colorIndex]);
+    state.targetColor.setHex(colors[colorOrder[colorIndex]]);
   }
 
   function onPointerMove(event) {
@@ -909,56 +1084,77 @@ function initScene() {
     const speed = reducedMotion ? 0.08 : 1;
     const scrollProgress = scrollState.current + (scrollState.target - scrollState.current) * 0.075;
     const isMobile = window.innerWidth < 700;
-    const baseScale = isMobile ? 0.84 : 1.18;
-    const baseParticleScale = isMobile ? 0.88 : 1.08;
-    const baseTunnelScale = isMobile ? 0.76 : 1;
+    const baseScale = isMobile ? 0.92 : 1.26;
     const globalCameraZ = state.baseCameraZ - scrollProgress * 1.55;
-    const coreCameraZ = isMobile ? 0.54 : 0.42;
+    const coreCameraZ = isMobile ? 3.8 : 3.05;
     const targetCameraZ = THREE.MathUtils.lerp(globalCameraZ, coreCameraZ, intro.core);
+    const shapeProgress = scrollProgress * (shapeCount - 1);
+    const fromCurve = Math.min(shapeCount - 1, Math.floor(shapeProgress));
+    const toCurve = Math.min(shapeCount - 1, fromCurve + 1);
+    const curveMix = smoothstep(shapeProgress - fromCurve);
+    const manualEase = smoothstep(manualMorph);
+    const fromTarget = manualMorph > 0.001 ? (manualUseSnapshot ? manualStartTargets : curveTargets[manualFrom]) : curveTargets[curveOrder[fromCurve]];
+    const toTarget = manualMorph > 0.001 ? curveTargets[manualTo] : curveTargets[curveOrder[toCurve]];
+    const activeMix = manualMorph > 0.001 ? 1 - manualEase : curveMix;
+    const transitionSeed = transitionSeeds[fromCurve];
     scrollState.current = scrollProgress;
 
     state.color.lerp(state.targetColor, 0.045);
-    knotMaterial.color.copy(state.color);
+    state.color.lerp(manualColor, manualEase * 0.05);
+    glowMaterial.color.copy(state.color);
     particleMaterial.color.copy(state.color);
-    tunnelMaterial.color.copy(state.color).lerp(new THREE.Color(0xffffff), 0.42);
-    tunnelMaterial.opacity = 0.13 + intro.core * 0.22;
-    shellMaterial.opacity = 0.16 + intro.core * 0.2;
-    particleMaterial.opacity = 0.82 + intro.core * 0.18;
-    particleMaterial.size = 0.052 + intro.core * 0.085;
+    glowMaterial.opacity = 0.18 + intro.core * 0.14;
+    particleMaterial.opacity = 0.78 + intro.core * 0.1;
+    particleMaterial.size = 0.016 + intro.core * 0.022;
+    glowMaterial.size = 0.052 + intro.core * 0.045;
 
-    group.rotation.y += 0.0018 * speed + state.project * 0.00018 + scrollProgress * 0.0012 + intro.core * 0.0022;
-    group.rotation.x += 0.0007 * speed + scrollProgress * 0.00042 + intro.core * 0.0012;
-    group.position.y = THREE.MathUtils.lerp(group.position.y, -scrollProgress * 1.1 - intro.core * 0.08, 0.032);
+    group.rotation.y = pointer.x * 0.18 + Math.sin(elapsed * 0.16 + scrollProgress * tau) * 0.22;
+    group.rotation.x = pointer.y * 0.12 + Math.sin(elapsed * 0.12 + scrollProgress * tau * 0.7) * 0.12;
+    group.rotation.z = intro.spin + elapsed * 0.018 * speed + scrollProgress * Math.PI * 0.74;
+    group.position.y = THREE.MathUtils.lerp(group.position.y, -scrollProgress * 0.78 - intro.core * 0.04, 0.032);
     group.position.x = THREE.MathUtils.lerp(group.position.x, Math.sin(scrollProgress * Math.PI * 2) * 0.42, 0.032);
-    shell.rotation.y -= 0.0007 * speed + scrollProgress * 0.00072;
-    tunnel.rotation.z = elapsed * 0.01 * speed + scrollProgress * Math.PI * 0.58;
-    tunnel.position.z = -scrollProgress * 4.2;
-    tunnel.position.y = scrollProgress * 0.64;
-    slash.rotation.z = Math.sin(elapsed * 0.22 + scrollProgress * 2.2) * 0.14;
-
-    knot.rotation.x += 0.0018 * speed + scrollProgress * 0.0011;
-    knot.rotation.z += 0.0009 * speed + scrollProgress * 0.001;
-    knot.scale.setScalar(1 + Math.sin(scrollProgress * Math.PI) * 0.08);
 
     const positionAttribute = particleGeometry.attributes.position;
     for (let index = 0; index < particleCount; index += 1) {
-      positionAttribute.array[index * 3 + 1] +=
-        Math.sin(elapsed * 0.55 + phase[index] + scrollProgress * 9) *
-        0.00034 *
-        speed *
-        (1 + scrollProgress * 0.9);
-      positionAttribute.array[index * 3 + 2] +=
-        Math.cos(elapsed * 0.22 + phase[index]) * 0.00022 * speed * scrollProgress;
+      const offset = index * 3;
+      const targetX = fromTarget[offset] + (toTarget[offset] - fromTarget[offset]) * activeMix;
+      const targetY = fromTarget[offset + 1] + (toTarget[offset + 1] - fromTarget[offset + 1]) * activeMix;
+      const targetZ = fromTarget[offset + 2] + (toTarget[offset + 2] - fromTarget[offset + 2]) * activeMix;
+      const localPhase = phase[index];
+      const radius = Math.sqrt(targetX * targetX + targetY * targetY) + 0.001;
+      const vortex = elapsed * 0.38 * speed + scrollProgress * tau * 2.8 + localPhase * 0.16;
+      const transitionNoise = Math.sin(localPhase + transitionSeed + curveMix * tau) * Math.sin(curveMix * Math.PI);
+      const clarity = manualMorph > 0.001 ? 1 - manualEase : 0;
+      const chaos = 0.13 + Math.sin(elapsed * 0.4 + localPhase) * 0.045 + transitionNoise * 0.1 * (1 - clarity);
+      const wake = intro.core * 1.08 + manualWarp * 0.18;
+
+      positionAttribute.array[offset] =
+        targetX +
+        Math.cos(vortex + radius * 0.8) * chaos +
+        drift[offset] * (1.4 + scrollProgress) +
+        origins[offset] * wake;
+      positionAttribute.array[offset + 1] =
+        targetY +
+        Math.sin(vortex - radius * 0.55) * chaos +
+        drift[offset + 1] * (1.4 + scrollProgress) +
+        origins[offset + 1] * wake;
+      positionAttribute.array[offset + 2] =
+        targetZ +
+        Math.sin(vortex * 0.7 + radius) * 0.42 +
+        drift[offset + 2] * (1.2 + scrollProgress * 1.4) +
+        origins[offset + 2] * wake;
     }
     positionAttribute.needsUpdate = true;
+    manualWarp += (0 - manualWarp) * 0.026;
+    manualMorph += (0 - manualMorph) * 0.011;
+    if (manualUseSnapshot && manualMorph < 0.34) {
+      manualUseSnapshot = false;
+      manualFrom = manualTo;
+    }
 
     camera.position.x += (pointer.x * 0.9 - camera.position.x) * 0.035;
     camera.position.y += (0.4 + pointer.y * 0.55 - camera.position.y) * 0.035;
     group.scale.setScalar(baseScale * intro.scale);
-    particles.scale.setScalar(baseParticleScale * (0.9 + intro.scale * 0.18 + intro.core * 1.15));
-    tunnel.scale.setScalar(baseTunnelScale * (1 + intro.core * 3.2));
-    group.rotation.z = intro.spin;
-    tunnel.position.z += intro.tunnelPull;
     camera.fov += (THREE.MathUtils.lerp(54, isMobile ? 104 : 96, intro.core) - camera.fov) * 0.1;
     camera.updateProjectionMatrix();
     camera.position.z += (targetCameraZ - camera.position.z) * 0.055;
@@ -981,21 +1177,14 @@ function initScene() {
     window.removeEventListener("resize", resize);
     window.removeEventListener("scroll", updateScroll);
     window.removeEventListener("mousemove", onPointerMove);
-    tunnelParts.forEach(({ geometry }) => geometry.dispose());
-    tunnelMaterial.dispose();
-    knotGeometry.dispose();
-    knotMaterial.dispose();
-    shellGeometry.dispose();
-    shellMaterial.dispose();
+    glowMaterial.dispose();
     particleGeometry.dispose();
     particleMaterial.dispose();
-    lineGeometry.dispose();
-    lineMaterial.dispose();
     renderer.dispose();
     renderer.domElement.remove();
   };
 
-  return { cleanup, intro };
+  return { cleanup, intro, randomize: randomizeCurves };
 }
 
 onMounted(() => {
@@ -1045,9 +1234,8 @@ onMounted(() => {
             .timeline({ defaults: { ease: "power4.out" } })
             .to(sceneApi?.intro ?? {}, {
               core: 0,
-              scale: 1,
-              spin: Math.PI * 2.05,
-              tunnelPull: 0,
+              scale: conditions.isMobile ? 0.9 : 0.96,
+              spin: Math.PI * 2.6,
               duration: conditions.isMobile ? 3.35 : 3.6,
             })
             .call(() => {
@@ -1131,6 +1319,7 @@ onUnmounted(() => {
   document.documentElement.classList.remove("hero-card-lock");
   window.removeEventListener("click", spawnClickParticles);
   window.clearTimeout(wechatTimer);
+  stopSceneShowcaseAuto();
   sceneApi?.cleanup?.();
   awardsSceneApi?.cleanup?.();
   mm?.revert();
@@ -1276,6 +1465,7 @@ onUnmounted(() => {
         <span>目标岗位：鸿蒙开发工程师</span>
       </div>
     </section>
+    <section class="scene-showcase" aria-label="3D 粒子背景展示"></section>
     <div class="copy-toast" :class="{ 'is-visible': showWechatToast }" role="status" aria-live="polite">
       已复制微信号
     </div>
