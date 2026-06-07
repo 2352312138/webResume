@@ -1043,12 +1043,13 @@ function initScene() {
   function resize() {
     const { width, height } = host.getBoundingClientRect();
     const isMobile = width < 700;
+    const isDesktop = width >= 900;
 
     renderer.setSize(width, height, false);
     camera.aspect = width / Math.max(height, 1);
-    state.baseCameraZ = isMobile ? 11.2 : 8.4;
+    state.baseCameraZ = isMobile ? 11.2 : isDesktop ? 9.45 : 8.4;
     camera.position.z = state.baseCameraZ;
-    group.scale.setScalar(isMobile ? 0.92 : 1.26);
+    group.scale.setScalar(isMobile ? 0.92 : isDesktop ? 1.08 : 1.26);
     camera.updateProjectionMatrix();
   }
 
@@ -1130,9 +1131,10 @@ function initScene() {
     const renderTargetProgress = showcaseState.active ? showcaseState.progress : scrollState.target;
     const scrollProgress = scrollState.current + (renderTargetProgress - scrollState.current) * 0.075;
     const isMobile = window.innerWidth < 700;
-    const baseScale = isMobile ? 0.92 : 1.26;
+    const isDesktop = window.innerWidth >= 900;
+    const baseScale = isMobile ? 0.92 : isDesktop ? 1.08 : 1.26;
     const globalCameraZ = state.baseCameraZ - scrollProgress * 1.55;
-    const coreCameraZ = isMobile ? 3.8 : 3.05;
+    const coreCameraZ = isMobile ? 3.8 : isDesktop ? 3.72 : 3.05;
     const targetCameraZ = THREE.MathUtils.lerp(globalCameraZ, coreCameraZ, intro.core);
     const shapeProgress = scrollProgress * (shapeCount - 1);
     const fromCurve = Math.min(shapeCount - 1, Math.floor(shapeProgress));
@@ -1157,10 +1159,10 @@ function initScene() {
     state.color.lerp(manualColor, manualEase * 0.05);
     glowMaterial.color.copy(state.color);
     particleMaterial.color.copy(state.color);
-    glowMaterial.opacity = 0.18 + intro.core * 0.14;
-    particleMaterial.opacity = 0.78 + intro.core * 0.1;
-    particleMaterial.size = 0.016 + intro.core * 0.022;
-    glowMaterial.size = 0.052 + intro.core * 0.045;
+    glowMaterial.opacity = isDesktop ? 0.13 + intro.core * 0.1 : 0.18 + intro.core * 0.14;
+    particleMaterial.opacity = isDesktop ? 0.72 + intro.core * 0.08 : 0.78 + intro.core * 0.1;
+    particleMaterial.size = isDesktop ? 0.013 + intro.core * 0.015 : 0.016 + intro.core * 0.022;
+    glowMaterial.size = isDesktop ? 0.042 + intro.core * 0.03 : 0.052 + intro.core * 0.045;
 
     const motionPhase = showcaseState.active ? elapsed * 0.18 : scrollProgress * tau;
     group.rotation.y = pointer.x * 0.18 + Math.sin(elapsed * 0.16 + motionPhase) * 0.22;
@@ -1174,7 +1176,7 @@ function initScene() {
       : -scrollProgress * 0.78 - intro.core * 0.04;
     const targetGroupX = showcaseState.active
       ? Math.sin(elapsed * 0.12) * 0.32
-      : Math.sin(scrollProgress * Math.PI * 2) * 0.42;
+      : Math.sin(scrollProgress * Math.PI * 2) * 0.42 + (isDesktop ? 0.42 : 0);
     group.position.y = THREE.MathUtils.lerp(group.position.y, targetGroupY, 0.032);
     group.position.x = THREE.MathUtils.lerp(group.position.x, targetGroupX, 0.032);
 
@@ -1219,7 +1221,7 @@ function initScene() {
     camera.position.x += (pointer.x * 0.9 - camera.position.x) * 0.035;
     camera.position.y += (0.4 + pointer.y * 0.55 - camera.position.y) * 0.035;
     group.scale.setScalar(baseScale * intro.scale);
-    camera.fov += (THREE.MathUtils.lerp(54, isMobile ? 104 : 96, intro.core) - camera.fov) * 0.1;
+    camera.fov += (THREE.MathUtils.lerp(54, isMobile ? 104 : isDesktop ? 82 : 96, intro.core) - camera.fov) * 0.1;
     camera.updateProjectionMatrix();
     camera.position.z += (targetCameraZ - camera.position.z) * 0.055;
     camera.lookAt(0, 0, 0);
@@ -1281,7 +1283,7 @@ onMounted(() => {
         if (conditions.reduceMotion) {
           introActive.value = false;
           unlockIntroScroll();
-          gsap.set([".nav", ".hero-copy", ".hero-copy > *", ".stat-card", ".intro-vignette"], {
+          gsap.set([".nav", ".hero-copy", ".hero-copy > *", ".stats", ".stat-card", ".intro-vignette"], {
             autoAlpha: 1,
             clearProps: "filter",
           });
@@ -1291,7 +1293,7 @@ onMounted(() => {
           lockIntroScroll();
           gsap.set(".nav", { autoAlpha: 0, y: -16 });
           gsap.set(".hero-copy", { autoAlpha: 0, filter: "blur(14px)" });
-          gsap.set([".hero-copy > *", ".stat-card"], { autoAlpha: 0 });
+          gsap.set([".hero-copy > *", ".stats", ".stat-card"], { autoAlpha: 0 });
           gsap.set(".intro-vignette", { autoAlpha: 1 });
 
           gsap
@@ -1342,12 +1344,12 @@ onMounted(() => {
               { autoAlpha: 0, y: 18, scale: 0.985 },
               { autoAlpha: 1, y: 0, scale: 1, stagger: 0.045, duration: 0.54 },
               "-=0.28",
-            );
+            )
+            .to(".stats", { autoAlpha: 1, duration: 0.01 }, "-=0.54");
         }
 
         gsap.utils.toArray(".reveal").forEach((el) => {
           gsap.from(el, {
-            autoAlpha: 0,
             y: conditions.isMobile ? 22 : 42,
             duration: conditions.reduceMotion ? 0 : conditions.isMobile ? 0.55 : 0.8,
             scrollTrigger: {
@@ -1360,7 +1362,6 @@ onMounted(() => {
 
         gsap.utils.toArray(".project-card").forEach((el, index) => {
           gsap.from(el, {
-            autoAlpha: 0,
             y: conditions.isMobile ? 20 : 36,
             scale: conditions.isMobile ? 0.995 : 0.98,
             delay: conditions.reduceMotion ? 0 : conditions.isMobile ? 0 : index * 0.03,
