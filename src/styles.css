@@ -49,10 +49,8 @@ body {
     radial-gradient(circle at 16% 8%, color-mix(in oklch, var(--violet), transparent 58%), transparent 28rem),
     radial-gradient(circle at 88% 22%, color-mix(in oklch, var(--cyan), transparent 70%), transparent 25rem),
     radial-gradient(circle at 48% 78%, color-mix(in oklch, var(--acid), transparent 86%), transparent 22rem),
-    linear-gradient(90deg, color-mix(in oklch, white, transparent 96%) 1px, transparent 1px),
-    linear-gradient(0deg, color-mix(in oklch, white, transparent 97%) 1px, transparent 1px),
     linear-gradient(180deg, black, var(--bg) 42%, oklch(0.05 0.018 285));
-  background-size: auto, auto, auto, 52px 52px, 52px 52px, auto;
+  background-size: auto;
   font-family: var(--font);
   text-rendering: optimizeLegibility;
 }
@@ -298,8 +296,7 @@ main.intro-active .webgl-stage {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(90deg, transparent, color-mix(in oklch, var(--cyan), transparent 86%), transparent),
-    linear-gradient(0deg, transparent 0 48%, color-mix(in oklch, white, transparent 84%) 48% 48.4%, transparent 48.4% 100%);
+    linear-gradient(90deg, transparent, color-mix(in oklch, var(--cyan), transparent 86%), transparent);
   opacity: 0.38;
   transform: translateX(-30%);
 }
@@ -336,9 +333,23 @@ main.intro-active .webgl-stage {
     transform 680ms cubic-bezier(0.16, 1, 0.3, 1),
     box-shadow 680ms cubic-bezier(0.16, 1, 0.3, 1),
     background 260ms ease;
-  user-select: none;
+  -webkit-touch-callout: none !important;
+  -webkit-user-drag: none;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
   touch-action: none;
   will-change: transform;
+}
+
+.hero-copy * {
+  -webkit-touch-callout: none !important;
+  -webkit-user-drag: none;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
 }
 
 .hero-copy.is-pressed {
@@ -373,10 +384,7 @@ main.intro-active .webgl-stage {
 }
 
 .hero-copy.is-pressed::before {
-  transition:
-    left 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    top 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 120ms ease;
+  transition: opacity 90ms ease;
 }
 
 .hero-copy::after {

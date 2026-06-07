@@ -227,8 +227,6 @@ let sceneApi;
 let awardsSceneApi;
 let wechatTimer;
 let clickParticleId = 0;
-let sceneShowcaseAutoTimer;
-let sceneShowcaseAutoActive = false;
 
 async function copyWechatAndOpenApp() {
   window.clearTimeout(wechatTimer);
@@ -359,12 +357,17 @@ function resetHeroCardTilt() {
   };
 }
 
+function getHeroCardEventPoint(event) {
+  return event.touches?.[0] ?? event.changedTouches?.[0] ?? event;
+}
+
 function updateHeroCardTilt(event, pressed = true) {
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
+  const point = getHeroCardEventPoint(event);
   const bounds = event.currentTarget.getBoundingClientRect();
-  const x = (event.clientX - bounds.left) / Math.max(bounds.width, 1);
-  const y = (event.clientY - bounds.top) / Math.max(bounds.height, 1);
+  const x = (point.clientX - bounds.left) / Math.max(bounds.width, 1);
+  const y = (point.clientY - bounds.top) / Math.max(bounds.height, 1);
   const offsetX = THREE.MathUtils.clamp(x - 0.5, -0.5, 0.5);
   const offsetY = THREE.MathUtils.clamp(y - 0.5, -0.5, 0.5);
 
@@ -381,6 +384,7 @@ function updateHeroCardTilt(event, pressed = true) {
 
 function pressHeroCard(event) {
   if (event.cancelable) event.preventDefault();
+  window.getSelection?.()?.removeAllRanges?.();
   document.documentElement.classList.add("hero-card-lock");
   event.currentTarget.setPointerCapture?.(event.pointerId);
   updateHeroCardTilt(event, true);
@@ -389,33 +393,14 @@ function pressHeroCard(event) {
 function moveHeroCard(event) {
   if (!heroCardPressed.value) return;
   if (event.cancelable) event.preventDefault();
+  window.getSelection?.()?.removeAllRanges?.();
   updateHeroCardTilt(event, true);
 }
 
 function releaseHeroCard(event) {
   event.currentTarget.releasePointerCapture?.(event.pointerId);
+  window.getSelection?.()?.removeAllRanges?.();
   resetHeroCardTilt();
-}
-
-function stopSceneShowcaseAuto() {
-  sceneShowcaseAutoActive = false;
-  window.clearTimeout(sceneShowcaseAutoTimer);
-}
-
-function scheduleSceneShowcaseAuto() {
-  window.clearTimeout(sceneShowcaseAutoTimer);
-  sceneShowcaseAutoTimer = window.setTimeout(() => {
-    if (!sceneShowcaseAutoActive) return;
-    sceneApi?.randomize?.();
-    scheduleSceneShowcaseAuto();
-  }, 3000 + Math.random() * 2000);
-}
-
-function startSceneShowcaseAuto() {
-  if (sceneShowcaseAutoActive) return;
-  sceneShowcaseAutoActive = true;
-  sceneApi?.randomize?.();
-  scheduleSceneShowcaseAuto();
 }
 
 function wrapCanvasText(context, text, x, y, maxWidth, lineHeight, maxLines) {
@@ -832,6 +817,16 @@ function initScene() {
     current: 0,
     target: 0,
   };
+  const showcaseState = {
+    active: false,
+    progress: 0,
+    wasActive: false,
+    lastElapsed: 0,
+    from: 0,
+    to: 1,
+    mix: 0,
+    hold: 1.6,
+  };
 
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
   renderer.setClearColor(0x000000, 0);
@@ -953,12 +948,26 @@ function initScene() {
       const spiralR = 0.13 * spiralT;
       setPoint(curveTargets[3], index, Math.cos(spiralT) * spiralR + lane * 0.25, Math.sin(spiralT) * spiralR + layer * 0.25, (u - 0.5) * 7.2 + Math.sin(spiralT) * 0.35);
 
-      const galaxyArm = index % 5;
-      const galaxyT = u * tau * 6.2 + galaxyArm * (tau / 5);
-      const galaxyR = 0.18 + Math.pow(u, 0.5) * 4.85;
-      const galaxyTwist = galaxyT + galaxyR * 1.72;
-      const armWidth = (Math.random() - 0.5) * (0.12 + u * 0.34);
-      setPoint(curveTargets[4], index, Math.cos(galaxyTwist + armWidth) * galaxyR + lane * 0.18, Math.sin(galaxyTwist + armWidth) * galaxyR * 0.58 + layer * 0.18, Math.sin(galaxyT * 1.55 + galaxyArm) * 0.55 + layer * 0.72);
+      const galaxyArm = index % 2;
+      const galaxyCore = index % 8 === 0;
+      const galaxyHalo = index % 19 === 0;
+      const galaxyU = galaxyCore ? Math.pow(u, 3.4) : u;
+      const galaxyR = galaxyCore ? 0.08 + galaxyU * 1.05 : 0.42 + Math.pow(galaxyU, 0.66) * 5.25;
+      const galaxyT = galaxyU * tau * 4.65 + galaxyArm * Math.PI;
+      const galaxyTwist = galaxyT + Math.pow(galaxyR, 1.42) * 3.35;
+      const vortexCurl = Math.sin(galaxyR * 4.7 + galaxyT * 1.1) * (galaxyCore ? 0.08 : 0.62);
+      const armWidth = galaxyCore
+        ? (Math.random() - 0.5) * 0.22
+        : (Math.random() - 0.5) * (galaxyHalo ? 0.34 : 0.045 + galaxyU * 0.075);
+      const haze = galaxyHalo ? 0.46 : 0.09;
+      const diskAngle = galaxyTwist + armWidth + vortexCurl;
+      setPoint(
+        curveTargets[4],
+        index,
+        Math.cos(diskAngle) * galaxyR + lane * haze,
+        Math.sin(diskAngle) * galaxyR * 0.36 + layer * haze * 0.48,
+        Math.sin(diskAngle * 0.82) * (galaxyCore ? 0.16 : 0.34) + layer * (galaxyCore ? 0.18 : galaxyHalo ? 0.58 : 0.32),
+      );
 
       const lemT = u * tau * 2;
       const lemDen = 1 + Math.pow(Math.sin(lemT), 2);
@@ -1057,14 +1066,28 @@ function initScene() {
     if (scrollDelta > 0.0015 && !atShowcase) {
       manualMorph = 0;
       manualWarp = 0;
-      stopSceneShowcaseAuto();
     }
 
-    if (atShowcase) {
-      startSceneShowcaseAuto();
-    } else {
-      stopSceneShowcaseAuto();
+    showcaseState.active = atShowcase;
+    if (showcaseState.active && !showcaseState.wasActive) {
+      showcaseState.from = 0;
+      showcaseState.to = 1;
+      showcaseState.mix = 0;
+      showcaseState.hold = 1.4;
+      showcaseState.progress = 0;
+      showcaseState.lastElapsed = 0;
     }
+    if (!showcaseState.active && showcaseState.wasActive) {
+      showcaseState.from = 0;
+      showcaseState.to = 1;
+      showcaseState.mix = 0;
+      showcaseState.hold = 1.4;
+      showcaseState.progress = progress;
+      scrollState.current = progress;
+      manualMorph = 0;
+      manualWarp = 0;
+    }
+    showcaseState.wasActive = showcaseState.active;
 
     scrollState.target = progress;
     state.targetColor.setHex(colors[colorOrder[colorIndex]]);
@@ -1082,7 +1105,30 @@ function initScene() {
   function render() {
     const elapsed = clock.getElapsedTime();
     const speed = reducedMotion ? 0.08 : 1;
-    const scrollProgress = scrollState.current + (scrollState.target - scrollState.current) * 0.075;
+    if (showcaseState.active) {
+      const delta = Math.min(0.05, Math.max(0, elapsed - showcaseState.lastElapsed));
+
+      if (showcaseState.hold > 0) {
+        showcaseState.hold -= delta;
+      } else {
+        showcaseState.mix += delta / 2.35;
+
+        if (showcaseState.mix >= 1) {
+          showcaseState.from = showcaseState.to;
+          showcaseState.to = (showcaseState.to + 1) % shapeCount;
+          showcaseState.mix = 0;
+          showcaseState.hold = 3.4;
+        }
+      }
+
+      showcaseState.progress = (showcaseState.from + smoothstep(Math.min(1, showcaseState.mix))) / (shapeCount - 1);
+    } else {
+      showcaseState.progress += (scrollState.target - showcaseState.progress) * 0.08;
+    }
+    showcaseState.lastElapsed = elapsed;
+
+    const renderTargetProgress = showcaseState.active ? showcaseState.progress : scrollState.target;
+    const scrollProgress = scrollState.current + (renderTargetProgress - scrollState.current) * 0.075;
     const isMobile = window.innerWidth < 700;
     const baseScale = isMobile ? 0.92 : 1.26;
     const globalCameraZ = state.baseCameraZ - scrollProgress * 1.55;
@@ -1093,13 +1139,21 @@ function initScene() {
     const toCurve = Math.min(shapeCount - 1, fromCurve + 1);
     const curveMix = smoothstep(shapeProgress - fromCurve);
     const manualEase = smoothstep(manualMorph);
-    const fromTarget = manualMorph > 0.001 ? (manualUseSnapshot ? manualStartTargets : curveTargets[manualFrom]) : curveTargets[curveOrder[fromCurve]];
-    const toTarget = manualMorph > 0.001 ? curveTargets[manualTo] : curveTargets[curveOrder[toCurve]];
-    const activeMix = manualMorph > 0.001 ? 1 - manualEase : curveMix;
+    const showcaseMix = smoothstep(Math.min(1, showcaseState.mix));
+    const scrollFrom = showcaseState.active ? showcaseState.from : curveOrder[fromCurve];
+    const scrollTo = showcaseState.active ? showcaseState.to : curveOrder[toCurve];
+    const fromTarget = manualMorph > 0.001 ? (manualUseSnapshot ? manualStartTargets : curveTargets[manualFrom]) : curveTargets[scrollFrom];
+    const toTarget = manualMorph > 0.001 ? curveTargets[manualTo] : curveTargets[scrollTo];
+    const activeMix = manualMorph > 0.001 ? 1 - manualEase : showcaseState.active ? showcaseMix : curveMix;
     const transitionSeed = transitionSeeds[fromCurve];
     scrollState.current = scrollProgress;
 
     state.color.lerp(state.targetColor, 0.045);
+    if (showcaseState.active) {
+      const fromColor = new THREE.Color(colors[showcaseState.from % colors.length]);
+      const toColor = new THREE.Color(colors[showcaseState.to % colors.length]);
+      state.color.lerp(fromColor.lerp(toColor, showcaseMix), 0.08);
+    }
     state.color.lerp(manualColor, manualEase * 0.05);
     glowMaterial.color.copy(state.color);
     particleMaterial.color.copy(state.color);
@@ -1108,11 +1162,21 @@ function initScene() {
     particleMaterial.size = 0.016 + intro.core * 0.022;
     glowMaterial.size = 0.052 + intro.core * 0.045;
 
-    group.rotation.y = pointer.x * 0.18 + Math.sin(elapsed * 0.16 + scrollProgress * tau) * 0.22;
-    group.rotation.x = pointer.y * 0.12 + Math.sin(elapsed * 0.12 + scrollProgress * tau * 0.7) * 0.12;
-    group.rotation.z = intro.spin + elapsed * 0.018 * speed + scrollProgress * Math.PI * 0.74;
-    group.position.y = THREE.MathUtils.lerp(group.position.y, -scrollProgress * 0.78 - intro.core * 0.04, 0.032);
-    group.position.x = THREE.MathUtils.lerp(group.position.x, Math.sin(scrollProgress * Math.PI * 2) * 0.42, 0.032);
+    const motionPhase = showcaseState.active ? elapsed * 0.18 : scrollProgress * tau;
+    group.rotation.y = pointer.x * 0.18 + Math.sin(elapsed * 0.16 + motionPhase) * 0.22;
+    group.rotation.x = pointer.y * 0.12 + Math.sin(elapsed * 0.12 + motionPhase * 0.7) * 0.12;
+    group.rotation.z =
+      intro.spin +
+      elapsed * (showcaseState.active ? 0.028 : 0.018) * speed +
+      (showcaseState.active ? 0 : scrollProgress * Math.PI * 0.74);
+    const targetGroupY = showcaseState.active
+      ? -0.28 - intro.core * 0.04 + Math.sin(elapsed * 0.16) * 0.08
+      : -scrollProgress * 0.78 - intro.core * 0.04;
+    const targetGroupX = showcaseState.active
+      ? Math.sin(elapsed * 0.12) * 0.32
+      : Math.sin(scrollProgress * Math.PI * 2) * 0.42;
+    group.position.y = THREE.MathUtils.lerp(group.position.y, targetGroupY, 0.032);
+    group.position.x = THREE.MathUtils.lerp(group.position.x, targetGroupX, 0.032);
 
     const positionAttribute = particleGeometry.attributes.position;
     for (let index = 0; index < particleCount; index += 1) {
@@ -1319,7 +1383,6 @@ onUnmounted(() => {
   document.documentElement.classList.remove("hero-card-lock");
   window.removeEventListener("click", spawnClickParticles);
   window.clearTimeout(wechatTimer);
-  stopSceneShowcaseAuto();
   sceneApi?.cleanup?.();
   awardsSceneApi?.cleanup?.();
   mm?.revert();
@@ -1354,6 +1417,12 @@ onUnmounted(() => {
         @pointerup="releaseHeroCard"
         @pointercancel="releaseHeroCard"
         @pointerleave="releaseHeroCard"
+        @touchstart.prevent.stop="pressHeroCard"
+        @touchmove.prevent.stop="moveHeroCard"
+        @touchend.prevent.stop="releaseHeroCard"
+        @touchcancel.prevent.stop="releaseHeroCard"
+        @selectstart.prevent.stop
+        @contextmenu.prevent.stop
       >
         <h2>王如洋</h2>
         <p class="role">深圳 · 鸿蒙开发工程师 · 7年工作经验</p>
