@@ -119,6 +119,7 @@ const projects = [
     impact: "儿童饮食行为辅助场景落地",
     markets: [
       { label: "安卓", type: "android", id: "com.gflow.foodmagic" },
+      { label: "iOS", type: "ios", id: "6753785128" },
     ],
   },
   {
